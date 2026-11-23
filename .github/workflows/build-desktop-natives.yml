@@ -1,0 +1,99 @@
+name: Build and publish desktop natives
+
+on:
+  push:
+    tags:
+      - 'natives-[0-9]*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: windows-x64
+            runner: windows-2025
+            os: windows
+            arch: x64
+            ext: dll
+          - key: windows-aarch64
+            runner: windows-11-arm
+            os: windows
+            arch: aarch64
+            ext: dll
+          - key: linux-x64
+            runner: ubuntu-24.04
+            os: linux
+            arch: x64
+            ext: so
+          - key: linux-aarch64
+            runner: ubuntu-24.04-arm
+            os: linux
+            arch: aarch64
+            ext: so
+          - key: macos-x64
+            runner: macos-15-intel
+            os: macos
+            arch: x64
+            ext: dylib
+          - key: macos-aarch64
+            runner: macos-15
+            os: macos
+            arch: aarch64
+            ext: dylib
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Require pinned iroh-java source ref
+        shell: bash
+        env:
+          IROH_JAVA_REF: ${{ vars.IROH_JAVA_REF }}
+        run: test -n "$IROH_JAVA_REF" || { echo 'Set repository variable IROH_JAVA_REF to a reviewed commit or tag.'; exit 1; }
+      - name: Check out pinned iroh-java source
+        uses: actions/checkout@v4
+        with:
+          repository: vgskye/iroh-java
+          ref: ${{ vars.IROH_JAVA_REF }}
+          path: iroh-java
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build JNI library
+        run: cargo build --locked --manifest-path iroh-java/rust/Cargo.toml --release
+      - name: Stage release asset
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#natives-}"
+          mkdir -p dist
+          if [[ "${{ matrix.os }}" == windows ]]; then source=iroh-java/rust/target/release/iroh_java.dll
+          else source=iroh-java/rust/target/release/libiroh_java.${{ matrix.ext }}; fi
+          test -f "$source"
+          cp "$source" "dist/e4all-native-${version}-${{ matrix.os }}-${{ matrix.arch }}.${{ matrix.ext }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.key }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Generate manifest and pinned hashes
+        run: python scripts/generate-hashes.py
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+      - name: Publish desktop assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --title "Desktop natives ${GITHUB_REF_NAME#natives-}" --notes "Desktop JNI libraries built from the pinned iroh-java source ref. Android releases use a separate tag and are not modified."
