@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 VERSION = os.environ.get("NATIVE_VERSION") or os.environ.get("GITHUB_REF_NAME", "").removeprefix("natives-")
 REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "Synquox/e4all-natives")
@@ -22,6 +23,22 @@ E4MC_X64_FILENAMES = {
     "macos-x64": "libiroh_java_osx_x86_64_b296210.dylib",
 }
 
+
+def hash_url(url):
+    request = Request(url, headers={"User-Agent": "e4all-native-release"})
+    digest = hashlib.sha256()
+    size = 0
+    with urlopen(request, timeout=30) as response:
+        if not response.geturl().startswith("https://"):
+            raise SystemExit(f"Refusing non-HTTPS URL: {response.geturl()}")
+        while True:
+            block = response.read(65536)
+            if not block:
+                break
+            digest.update(block)
+            size += len(block)
+    return digest.hexdigest(), size
+
 if not VERSION:
     raise SystemExit("Set NATIVE_VERSION or run on a natives-<version> tag")
 
@@ -35,14 +52,16 @@ for key, (os_name, arch, extension) in ARTIFACTS.items():
     if not path.is_file():
         raise SystemExit(f"Missing native artifact: {path}")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    urls = []
+    size = path.stat().st_size
     if key in E4MC_X64_FILENAMES:
-        urls.append(f"https://natives.e4mc.link/{E4MC_X64_FILENAMES[key]}")
-    urls.append(f"https://github.com/{REPOSITORY}/releases/download/natives-{VERSION}/{name}")
+        urls = [f"https://natives.e4mc.link/{E4MC_X64_FILENAMES[key]}"]
+        digest, size = hash_url(urls[0])
+    else:
+        urls = [f"https://github.com/{REPOSITORY}/releases/download/natives-{VERSION}/{name}"]
     manifest[key] = {
         "urls": urls,
         "sha256": digest,
-        "size": path.stat().st_size,
+        "size": size,
     }
     hashes.append(f"desktop.{key}={digest}")
 
