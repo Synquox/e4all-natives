@@ -39,6 +39,22 @@ def hash_url(url):
             size += len(block)
     return digest.hexdigest(), size
 
+
+def local_entry(dist: Path, name: str):
+    path = dist / name
+    if not path.is_file():
+        raise SystemExit(f"Missing native artifact: {path}")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    size = path.stat().st_size
+    url = f"https://github.com/{REPOSITORY}/releases/download/natives-{VERSION}/{name}"
+    return {
+        "name": name,
+        "urls": [url],
+        "sha256": digest,
+        "size": size,
+    }
+
+
 if not VERSION:
     raise SystemExit("Set NATIVE_VERSION or run on a natives-<version> tag")
 
@@ -48,6 +64,15 @@ manifest = {"nativeVersion": VERSION}
 hashes = ["# SHA-256 hashes for the e4all desktop native release."]
 for key, (os_name, arch, extension) in ARTIFACTS.items():
     name = f"e4all-native-{VERSION}-{os_name}-{arch}.{extension}"
+    if key == "windows-aarch64":
+        quiche_name = f"e4all-quiche-{VERSION}-windows-aarch64.dll"
+        iroh_entry = local_entry(dist, name)
+        quiche_entry = local_entry(dist, quiche_name)
+        manifest[key] = {"files": [iroh_entry, quiche_entry]}
+        hashes.append(f"desktop.{key}.{name}={iroh_entry['sha256']}")
+        hashes.append(f"desktop.{key}.{quiche_name}={quiche_entry['sha256']}")
+        continue
+
     path = dist / name
     if not path.is_file():
         raise SystemExit(f"Missing native artifact: {path}")

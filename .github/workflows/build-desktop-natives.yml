@@ -76,8 +76,104 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  build-windows-arm64-quiche:
+    runs-on: windows-11-arm
+    steps:
+      - name: Check out pinned netty-incubator-codec-quic source
+        uses: actions/checkout@v4
+        with:
+          repository: vgskye/netty-incubator-codec-quic
+          ref: adb76feb04d014ad5fd00e5727b78ac5ada9e1fb
+          path: netty-quic
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install stable Rust for Windows ARM64
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - name: Configure MSVC ARM64 environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: Ensure Ninja is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            python -m pip install ninja
+          }
+      - name: Build BoringSSL and Quiche for Windows ARM64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $work = (Get-Location).Path
+
+          git clone https://boringssl.googlesource.com/boringssl boringssl
+          Push-Location boringssl
+          git checkout cccf8525db8a57153d3cb3e22efed2db4b71a8ab
+          Pop-Location
+
+          cmake -B bssl-build -S boringssl -GNinja `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DCMAKE_SYSTEM_PROCESSOR=ARM64 `
+            -DOPENSSL_NO_ASM=ON
+          cmake --build bssl-build --target ssl crypto
+
+          New-Item -ItemType Directory -Force -Path "bssl-home\build\RelWithDebInfo" | Out-Null
+          Copy-Item "bssl-build\ssl.lib" "bssl-home\build\RelWithDebInfo\ssl.lib"
+          Copy-Item "bssl-build\crypto.lib" "bssl-home\build\RelWithDebInfo\crypto.lib"
+          Copy-Item -Recurse "boringssl\include" "bssl-home\include"
+
+          git clone https://github.com/cloudflare/quiche.git quiche
+          Push-Location quiche
+          git checkout 5ea8d8e3569c1ed34b895e2211e62791e77c29ab
+          $env:DEBUG = "true"
+          $env:OPT_LEVEL = "3"
+          $env:QUICHE_BSSL_PATH = "$work\bssl-home"
+          cargo build -p quiche --features "ffi qlog" --release --target aarch64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+      - name: Compile netty-quiche JNI DLL for Windows ARM64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $work = (Get-Location).Path
+          $version = $env:GITHUB_REF_NAME -replace '^natives-', ''
+
+          New-Item -ItemType Directory -Force -Path "jni-util","dist" | Out-Null
+          Invoke-WebRequest -Uri "https://repo1.maven.org/maven2/io/netty/netty-jni-util/0.0.9.Final/netty-jni-util-0.0.9.Final-sources.jar" -OutFile "jni-util.jar"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory("$work\jni-util.jar", "$work\jni-util")
+
+          $cDir = "$work\netty-quic\codec-native-quic\src\main\c"
+          $outDll = "$work\dist\e4all-quiche-$version-windows-aarch64.dll"
+          $javaInc = "$env:JAVA_HOME\include"
+          $javaWinInc = "$env:JAVA_HOME\include\win32"
+          $bsslInc = "$work\bssl-home\include"
+          $quicheInc = "$work\quiche\quiche\include"
+          $jniUtilInc = "$work\jni-util\io\netty\jni\util"
+          $sslLib = "$work\bssl-home\build\RelWithDebInfo\ssl.lib"
+          $cryptoLib = "$work\bssl-home\build\RelWithDebInfo\crypto.lib"
+          $quicheLib = "$work\quiche\target\aarch64-pc-windows-msvc\release\quiche.lib"
+
+          cl.exe /nologo /LD /O2 /MT /W3 /wd4091 `
+            /I"$javaInc" /I"$javaWinInc" /I"$bsslInc" /I"$quicheInc" /I"$jniUtilInc" /I"$cDir" `
+            "$cDir\netty_quic_boringssl.c" "$cDir\netty_quic_quiche.c" "$jniUtilInc\netty_jni_util.c" `
+            /Fe:"$outDll" `
+            /link "$sslLib" "$cryptoLib" "$quicheLib" ntdll.lib ws2_32.lib crypt32.lib bcrypt.lib userenv.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path $outDll)) { throw "Missing $outDll" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-aarch64-quiche
+          path: dist/*
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, build-windows-arm64-quiche]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -96,4 +192,4 @@ jobs:
       - name: Publish desktop assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/* --title "Desktop natives ${GITHUB_REF_NAME#natives-}" --notes "Desktop JNI libraries built from the pinned iroh-java source ref. Android releases use a separate tag and are not modified."
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --title "Desktop natives ${GITHUB_REF_NAME#natives-}" --notes "Desktop JNI libraries built from the pinned iroh-java and netty-incubator-codec-quic sources. Android releases use a separate tag and are not modified."
