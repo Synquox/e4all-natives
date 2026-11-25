@@ -154,7 +154,7 @@ jobs:
           $javaWinInc = "$env:JAVA_HOME\include\win32"
           $bsslInc = "$work\bssl-home\include"
           $quicheInc = "$work\quiche\quiche\include"
-          $jniUtilInc = "$work\jni-util\io\netty\jni\util"
+          $jniUtilInc = "$work\jni-util"
           $sslLib = "$work\bssl-home\build\RelWithDebInfo\ssl.lib"
           $cryptoLib = "$work\bssl-home\build\RelWithDebInfo\crypto.lib"
           $quicheLib = "$work\quiche\target\aarch64-pc-windows-msvc\release\quiche.lib"
