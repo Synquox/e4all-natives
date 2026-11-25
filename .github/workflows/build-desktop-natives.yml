@@ -163,7 +163,7 @@ jobs:
             /I"$javaInc" /I"$javaWinInc" /I"$bsslInc" /I"$quicheInc" /I"$jniUtilInc" /I"$cDir" `
             "$cDir\netty_quic_boringssl.c" "$cDir\netty_quic_quiche.c" "$jniUtilInc\netty_jni_util.c" `
             /Fe:"$outDll" `
-            /link "$sslLib" "$cryptoLib" "$quicheLib" ntdll.lib ws2_32.lib crypt32.lib bcrypt.lib userenv.lib
+            /link "$sslLib" "$cryptoLib" "$quicheLib" ntdll.lib ws2_32.lib crypt32.lib bcrypt.lib userenv.lib synchronization.lib advapi32.lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Test-Path $outDll)) { throw "Missing $outDll" }
       - uses: actions/upload-artifact@v4
